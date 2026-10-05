@@ -39,7 +39,7 @@ add_custom_command(
     COMMENT "Generating the 2^r minimax coefficients (exp_coeffs.h)"
     VERBATIM)
 
-add_custom_target(gen_headers
+add_custom_target(gen_data
     DEPENDS ${GEN_DIR}/flash_data.hh ${GEN_DIR}/flash_data.bin
             ${GEN_DIR}/O_ref.bin
             ${GEN_DIR}/exp_coeffs.h)

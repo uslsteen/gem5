@@ -41,4 +41,4 @@ set_target_properties(flash_accelerator PROPERTIES
     PREFIX "" SUFFIX ".elf" OUTPUT_NAME "flash_accelerator"
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/workload)
 
-add_dependencies(flash_accelerator gen_headers)
+add_dependencies(flash_accelerator gen_data)

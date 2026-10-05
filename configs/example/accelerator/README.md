@@ -31,6 +31,18 @@ cmake --build build --target gen_data -j8
 Target `gen_data` regenerates `build/generated/flash_data.bin` and
 `build/generated/O_ref.bin`.
 
+The prefill/decode regime is also a data-generation only:
+`FLASH_REGIME` (prefill|decode) — in the decode regime `gen_flash.py`
+zeroes all query rows except the first (one token in flight). The
+firmware has no regime logic: it processes whatever the image holds
+(the tile count is inferred from the image size). `FLASH_CAUSAL` adds
+the causal boundary mask to the last tile.
+
+```sh
+cmake -B build -DFLASH_REGIME=decode
+cmake --build build --target gen_data -j8
+```
+
 ## 2. Run the simulation
 
 ```sh

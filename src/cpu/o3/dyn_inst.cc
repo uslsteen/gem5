@@ -43,9 +43,26 @@
 #include <algorithm>
 
 #include "base/intmath.hh"
+#include "base/loader/symtab.hh"
+#include "base/trace.hh"
+#include "base/types.hh"
+#include "cpu/base.hh"
+#include "cpu/checker/cpu.hh"
+#include "cpu/exetrace.hh"
+#include "cpu/inst_seq.hh"
+#include "cpu/o3/cpu.hh"
+#include "cpu/o3/inst_queue.hh"
+#include "cpu/o3/lsq_unit.hh"
+#include "cpu/o3/thread_state.hh"
+#include "cpu/reg_class.hh"
+#include "cpu/static_inst.hh"
+#include "cpu/static_inst_fwd.hh"
+#include "cpu/thread_context.hh"
 #include "debug/DynInst.hh"
 #include "debug/IQ.hh"
 #include "debug/O3PipeView.hh"
+#include "debug/UscopeView.hh"
+#include "mem/request.hh"
 
 namespace gem5
 {
@@ -224,13 +241,21 @@ DynInst::~DynInst()
         // window.
         if (fetch != -1) {
             Tick val;
-            // Print info needed by the pipeline activity viewer.
+            // Print info needed by the pipeline activity viewer. The
+            std::string disasm = staticInst->disassemble(pcState().instAddr());
+            auto sym_it =
+                loader::debugSymbolTable.findNearest(pcState().instAddr());
+            if (sym_it != loader::debugSymbolTable.end()) {
+                Addr delta = pcState().instAddr() - sym_it->address();
+                disasm += delta ? csprintf(" @%s+%d", sym_it->name(), delta)
+                                : csprintf(" @%s", sym_it->name());
+            }
             DPRINTFR(O3PipeView, "O3PipeView:fetch:%llu:0x%08llx:%d:%llu:%s\n",
                      fetch,
                      pcState().instAddr(),
                      pcState().microPC(),
                      seqNum,
-                     staticInst->disassemble(pcState().instAddr()));
+                     disasm);
 
             val = (decodeTick == -1) ? 0 : fetch + decodeTick;
             DPRINTFR(O3PipeView, "O3PipeView:decode:%llu\n", val);
@@ -247,6 +272,16 @@ DynInst::~DynInst()
             Tick valS = (storeTick == -1) ? 0 : fetch + storeTick;
             DPRINTFR(O3PipeView, "O3PipeView:retire:%llu:store:%llu\n",
                     val, valS);
+        }
+    }
+    if (debug::UscopeView) {
+        DPRINTFR(UscopeView, "uScopeView:usinfo:%d:%llu:%s\n",
+                 cpu->cpuId(), seqNum,
+                 enums::OpClassStrings[staticInst->opClass()]);
+        if (isMemRef() && effAddrValid()) {
+            DPRINTFR(UscopeView, "uScopeView:minfo:%d:%llu:0x%llx\n",
+                     cpu->cpuId(), seqNum,
+                     (unsigned long long)effAddr);
         }
     }
 #endif

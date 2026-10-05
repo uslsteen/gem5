@@ -5979,7 +5979,7 @@ decode QUADRANT default Unknown::unknown() {
                         IsVset = true;
                     }}, VSetVlDeclare, VSetVliBranchTarget
                       , SimdConfigOp, IsUncondControl
-                      , IsIndirectControl);
+                      , IsIndirectControl, IsSquashAfter, IsSerializeAfter);
                     0x1: decode BIT30 {
                         0x0: vsetvl({{
                             uint64_t rd_bits = RD;
@@ -5995,7 +5995,7 @@ decode QUADRANT default Unknown::unknown() {
                             IsVset = true;
                         }}, VSetVlDeclare, VSetVlBranchTarget
                           , SimdConfigOp, IsUncondControl
-                          , IsIndirectControl);
+                          , IsIndirectControl, IsSquashAfter, IsSerializeAfter);
                         0x1: vsetivli({{
                             uint64_t rd_bits = RD;
                             uint64_t rs1_bits = -1;
@@ -6010,7 +6010,7 @@ decode QUADRANT default Unknown::unknown() {
                             IsVset = true;
                         }}, VSetiVliDeclare, VSetiVliBranchTarget
                           , SimdConfigOp, IsUncondControl
-                          , IsDirectControl);
+                          , IsDirectControl, IsSquashAfter, IsSerializeAfter);
                     }
                 }
             }

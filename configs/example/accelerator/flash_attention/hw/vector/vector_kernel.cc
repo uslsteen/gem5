@@ -31,6 +31,7 @@ using kernel::vector_state;
 [[gnu::section(".sram_text"), gnu::always_inline]] inline void
 wait_flag(std::uintptr_t addr) {
   while (accel::sync_flag(addr) == 0) {
+    // Compiler barrier
     __asm__ volatile("" ::: "memory");
   }
   accel::sync_flag(addr) = 0;
@@ -39,6 +40,7 @@ wait_flag(std::uintptr_t addr) {
 [[gnu::section(".sram_text"), gnu::always_inline]] inline void
 raise_flag(std::uintptr_t addr) {
   accel::sync_flag(addr) = 1;
+  // The barrier gives the store its release ordering
   __asm__ volatile("" ::: "memory");
 }
 
@@ -53,6 +55,7 @@ extern "C" [[gnu::section(".sram_text"), noreturn]] void vector_main() {
   auto *const spm_p = reinterpret_cast<std::uint8_t *>(accel::kSpmP);
 
   for (;;) {
+    // One pipeline iteration per KV tile
     // Phase 1: the online softmax of the S_j tile
     while (accel::sync_flag(accel::kSyncSoftmax) == 0 &&
            accel::sync_flag(accel::kSyncFinalize) == 0) {
@@ -65,6 +68,9 @@ extern "C" [[gnu::section(".sram_text"), noreturn]] void vector_main() {
       kernel::finalize_o(s.o_acc.data(), s.l,
                          reinterpret_cast<float *>(accel::kOAccAddr));
       raise_flag(accel::kSyncDone);
+      // The run is over: a bare-metal hart has no OS to return to,
+      // so the vector parks in an empty spin until the control hart's
+      // m5_exit ends the simulation.
       for (;;) {
         __asm__ volatile("" ::: "memory");
       }
@@ -76,7 +82,7 @@ extern "C" [[gnu::section(".sram_text"), noreturn]] void vector_main() {
 
     softmax.processTile(s.s_f16, s.p_f16, s.m, s.l, s.c);
 
-    // Quantize P to int8 (127 * P, truncated)
+    // Quantize P to int8 ((2 ** 7 - 1) * P, truncated)
     // A operand is stored k-major (A[i][k] = P[i][k]),
     // so no transpose here.
     kernel::quantize_f16_tile_to_q8(s.p_f16, spm_p);
@@ -94,5 +100,5 @@ extern "C" [[gnu::section(".sram_text"), noreturn]] void vector_main() {
     }
 
     raise_flag(accel::kSyncDone);
-  }
+    }
 }

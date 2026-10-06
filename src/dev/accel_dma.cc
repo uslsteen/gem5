@@ -28,7 +28,8 @@ AccelDma::AccelDma(const AccelDmaParams &p)
       activeDst(0), requestorId(sys->getRequestorId(this)),
       clockPeriod(p.clock_period), dramReadCycles(p.dram_read_cycles),
       dramWriteCycles(p.dram_write_cycles),
-      bwBytesPerCycle(p.dma_bw_bytes_per_cycle), dramBase(p.dram_base),
+      bwBytesPerCycle(p.dma_bw_bytes_per_cycle),
+      configLatencyCycles(p.config_latency_cycles), dramBase(p.dram_base),
       sramWindow(p.sram_window),
       doneEvent([this] { finishTransfer(); }, name() + ".done") {
   mmreg = new uint8_t[ioSize];
@@ -77,9 +78,11 @@ void AccelDma::startTransfer() {
           isDram(activeDst) ? "DRAM" : "SRAM", activeDst, len);
 
   // The transfer's physical timing is analytic formula:
-  // DRAM read/write latency + 512-bit/cycle streaming
+  // configuration latency + DRAM read/write latency + 512-bit/cycle
+  // streaming; the config latency is charged once per transfer.
   functionalCopy(activeSrc, activeDst, len);
-  const uint64_t cycles = (isDram(activeSrc) ? dramReadCycles : 0) +
+  const uint64_t cycles = configLatencyCycles +
+                          (isDram(activeSrc) ? dramReadCycles : 0) +
                           (isDram(activeDst) ? dramWriteCycles : 0) +
                           (len + bwBytesPerCycle - 1) / bwBytesPerCycle;
   schedule(doneEvent, curTick() + cycles * clockPeriod * sim_clock::as_int::ps);

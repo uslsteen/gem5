@@ -61,6 +61,7 @@ class AccelDma : public BasicPioDevice
     uint64_t dramReadCycles;
     uint64_t dramWriteCycles;
     uint64_t bwBytesPerCycle;
+    uint64_t configLatencyCycles;
     Addr dramBase;
     AddrRange sramWindow;
 

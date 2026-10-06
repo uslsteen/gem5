@@ -25,6 +25,10 @@ class AccelDma(BasicPioDevice):
     dma_bw_bytes_per_cycle = Param.UInt64(
         64, "DRAM<->DMA bandwidth, bytes/cycle (512 bit/cycle)"
     )
+    config_latency_cycles = Param.UInt64(
+        200, "Control CPU to DMA configuration latency, cycles "
+        "(charged once per transfer)"
+    )
     dram_base = Param.Addr(
         0x80000000, "Latency class: addresses >= dram_base pay the DRAM "
         "read/write latencies; below is SRAM"

@@ -4,12 +4,18 @@
     DRAM 64 GiB (4 x DDR4_2400_8x8, [0x80000000, 0x1080000000))
       |
     SystemXBar 64B)
-      |-- Control CPU (RiscvTimingSimpleCPU, hart 0)
-      |-- bridge_dma  (100 ns -> control->DMA config; the Bridge charges
-      |                 the delay on request/response,
-      |                 per-access latencies are 200/2, 100/2, 300/2 ns)
-      |-- bridge_arr  (50 ns  -> control->array config)
-      |-- bridge_vec  (150 ns -> control->vector sync interface)
+      |-- boot/DRAM only (boot bridges, AccelDma.port, mem_ctrls)
+
+    ctl_bus (NoncoherentXBar 128B — the control CPU's private plane)
+      |-- Control CPU (RiscvTimingSimpleCPU, hart 0, icache+dcache)
+      |-- ctl_mem     (SimpleMemory, the control hart's local memory)
+      |-- bridge_dma  (1 ns; the 200-cycle config latency is charged
+      |                 once per transfer inside AccelDma)
+      |-- bridge_arr  (1 ns; the 100-cycle latency is charged once per
+      |                 launch inside SystolicArray)
+      |-- bridge_vec  (150 ns -> control->vector sync interface, charged
+      |                 per access = per flag message)
+      |-- ctl_boot_bridge (first DRAM page)
       |
     iobus (NoncoherentXBar 128B, the control/SPM plane)
       |-- AccelDma     PIO @ 0x10000000 (flags/src/dst/len)
@@ -17,11 +23,13 @@
       |-- SPM tiles (SimpleMemory): spm_qp/spm_kv/spm_so
       |-- AccelDma.sram_port + SystolicArray.local 
 
-    sram_bus (NoncoherentXBar 128B — the SRAM's private arbiter)
+    sram_bus (NoncoherentXBar 128B — the vector CPU's private SRAM port, 1024 bit/cycle)
       |-- Vector CPU (RiscvO3CPU + RVV, hart 1)
       |-- bridge_vec
       |-- boot_bridge
-      |-- sram_workspace (SimpleMemory 1 MiB @ 0x11000000)
+      |-- sram_workspace (SimpleMemory @ 0x11000000..0x11010000)
+      |-- sram_stack     (SimpleMemory @ 0x110F0000..0x11100000,
+      |
       |-- spm_bridge -> iobus
 """
 
@@ -129,6 +137,13 @@ def make_system(elf, issue_width=ISSUE_WIDTH, vlen=VLEN):
     system.sram_bus = NoncoherentXBar(
         width=128, frontend_latency=1, forward_latency=0,
         response_latency=1)
+
+    # The control CPU's private plane: local code/data memory and the
+    # device bridges hang off this 1-stage bus
+    system.ctl_bus = NoncoherentXBar(
+        width=128, frontend_latency=1, forward_latency=0,
+        response_latency=1)
+
     system.system_port = system.membus.cpu_side_ports
 
     mem_ctrls = []
@@ -144,29 +159,31 @@ def make_system(elf, issue_width=ISSUE_WIDTH, vlen=VLEN):
     system.mem_ctrls = mem_ctrls
 
     # Control-plane bridges
-    # Per-access control latency (200/100/300 cycles);
+    # The DMA and array latencies are charged once per operation inside
+    # the devices, so those bridges are plain routing
     def _bridge(start, end, delay_ns, target_bus):
         bridge = Bridge(delay=f"{delay_ns}ns",
                         ranges=[AddrRange(start, end)])
-        bridge.cpu_side_port = system.membus.mem_side_ports
+        bridge.cpu_side_port = system.ctl_bus.mem_side_ports
         bridge.mem_side_port = target_bus
         return bridge
 
     system.bridge_dma = _bridge(SRAM_BASE, DMA_PIO_END,
-                                LAT_DMA // 2, system.iobus.cpu_side_ports)
+                                1, system.iobus.cpu_side_ports)
     system.bridge_arr = _bridge(SRAM_BASE + 0x40, ARR_PIO_END,
-                                LAT_ARR // 2, system.iobus.cpu_side_ports)
+                                1, system.iobus.cpu_side_ports)
 
     # The control's sync interface to the vector CPU
     system.bridge_vec = _bridge(WORKSPACE_BASE,
                                 CTL_REGION_BASE, LAT_VEC // 2,
                                 system.sram_bus.cpu_side_ports)
 
-    # The Control hart's own code/data/stack is local memory, 
-    # not the control->vector interface
-    system.bridge_ctl = _bridge(CTL_REGION_BASE,
-                                CTL_REGION_END, 1,
-                                system.sram_bus.cpu_side_ports)
+    # The Control hart's own code/data/stack: local memory on its own path.
+    system.ctl_mem = SimpleMemory(
+        range=AddrRange(CTL_REGION_BASE, size=CTL_REGION_END -
+                        CTL_REGION_BASE),
+        latency=MEM_LATENCY, bandwidth=MEM_BANDWIDTH)
+    system.ctl_mem.port = system.ctl_bus.mem_side_ports
 
     system.spm_bridge = Bridge(
         delay="1ns",
@@ -182,6 +199,23 @@ def make_system(elf, issue_width=ISSUE_WIDTH, vlen=VLEN):
     system.boot_bridge.cpu_side_port = system.sram_bus.mem_side_ports
     system.boot_bridge.mem_side_port = system.membus.cpu_side_ports
 
+    # The control hart's DRAM window
+    system.ctl_boot_bridge = Bridge(delay="10ns",
+                                    ranges=[AddrRange(DRAM_BASE,
+                                                      size=DRAM_SIZE)])
+    system.ctl_boot_bridge.cpu_side_port = system.ctl_bus.mem_side_ports
+    system.ctl_boot_bridge.mem_side_port = system.membus.cpu_side_ports
+
+    # Functional-only routes so the bare-metal loader
+    system.load_ws_bridge = Bridge(
+        delay="1ns", ranges=[AddrRange(WORKSPACE_BASE, CTL_REGION_BASE)])
+    system.load_ws_bridge.cpu_side_port = system.membus.mem_side_ports
+    system.load_ws_bridge.mem_side_port = system.sram_bus.cpu_side_ports
+    system.load_ctl_bridge = Bridge(
+        delay="1ns", ranges=[AddrRange(CTL_REGION_BASE, CTL_REGION_END)])
+    system.load_ctl_bridge.cpu_side_port = system.membus.mem_side_ports
+    system.load_ctl_bridge.mem_side_port = system.ctl_bus.cpu_side_ports
+
     system.dma = AccelDma(pio_addr=DMA_PIO)
     system.dma.pio = system.iobus.mem_side_ports
     system.dma.port = system.membus.cpu_side_ports
@@ -189,10 +223,14 @@ def make_system(elf, issue_width=ISSUE_WIDTH, vlen=VLEN):
     system.dma.sram_window = [AddrRange(SRAM_BASE, size="12KiB")]
     system.dma.dram_base = DRAM_BASE
 
+    # The PIO register access itself is free
+    system.dma.pio_latency = "1ns"
+
     # The 16x16 systolic array: PIO-visible from the control side
     system.matmul = SystolicArray(pio_addr=MATMUL_PIO)
     system.matmul.pio = system.iobus.mem_side_ports
     system.matmul.local = system.iobus.cpu_side_ports
+    system.matmul.pio_latency = "1ns"
 
     # The tile scratchpads - one SimpleMemory per SPM tile
     system.spm_qp = SimpleMemory(
@@ -218,8 +256,8 @@ def make_system(elf, issue_width=ISSUE_WIDTH, vlen=VLEN):
     control_cpu.clk_domain = SrcClockDomain(
         clock=CLK, voltage_domain=VoltageDomain()
     )
-    control_cpu.icache_port = system.sram_bus.cpu_side_ports
-    control_cpu.dcache_port = system.membus.cpu_side_ports
+    control_cpu.icache_port = system.ctl_bus.cpu_side_ports
+    control_cpu.dcache_port = system.ctl_bus.cpu_side_ports
 
     # Vector CPU (hart 1)
     vector_cpu = RiscvO3CPU(
@@ -246,12 +284,21 @@ def make_system(elf, issue_width=ISSUE_WIDTH, vlen=VLEN):
 
     system.cpu = [control_cpu, vector_cpu]
 
-    # The vector-CPU workspace (the SRAM's working-set partition).
+    # The vector-CPU workspace: the SRAM's working-set partition, split
+    # around the control hart's private CTL region (ctl_mem above).
+    # The lo piece holds the sync flags, the vector's code/data and the
+    # fp32 accumulator; the hi piece is the vector's stack (the linker
+    # puts it at the workspace top).
     system.sram_workspace = SimpleMemory(
-        range=AddrRange(WORKSPACE_BASE, size=WORKSPACE_SIZE),
+        range=AddrRange(WORKSPACE_BASE, CTL_REGION_BASE),
         latency=MEM_LATENCY, bandwidth=MEM_BANDWIDTH,
     )
     system.sram_workspace.port = system.sram_bus.mem_side_ports
+    system.sram_stack = SimpleMemory(
+        range=AddrRange(CTL_REGION_END, size="64KiB"),
+        latency=MEM_LATENCY, bandwidth=MEM_BANDWIDTH,
+    )
+    system.sram_stack.port = system.sram_bus.mem_side_ports
 
     return system
 

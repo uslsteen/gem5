@@ -17,3 +17,7 @@ class SystolicArray(BasicPioDevice):
     clock_period = Param.Int(
         1, "Clock period in ns (1 GHz domain)"
     )
+    config_latency_cycles = Param.UInt64(
+        100, "Control CPU to systolic array communication latency, "
+        "cycles (charged once per launch)"
+    )

@@ -11,8 +11,8 @@
  *   +24 c_base (8 B)
  *   +32 k_len  (8 B)
  *
- * The control CPU's 100-cycle configuration latency is modelled by the
- * bridge in front of this device (bridge_arr), not here.
+ * The control CPU's 100-cycle communication latency is charged once
+ * per launch inside the busy window below (configLatencyCycles).
  */
 
 #ifndef __DEV_SYSTOLIC_ARRAY_HH__
@@ -81,6 +81,7 @@ class SystolicArray : public BasicPioDevice
 
     // Cycle -> tick conversion (clock_period is in ns).
     int clockPeriod;
+    uint64_t configLatencyCycles;
 
     EventFunctionWrapper doneEvent;
 

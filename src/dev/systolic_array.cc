@@ -37,6 +37,7 @@ SystolicArray::SystolicArray(const SystolicArrayParams &p)
       busyUntil(0),
       requestorId(sys->getRequestorId(this)),
       clockPeriod(p.clock_period),
+      configLatencyCycles(p.config_latency_cycles),
       doneEvent([this] { finishRun(); }, name() + ".done")
 {
     mmreg = new uint8_t[ioSize];
@@ -138,10 +139,15 @@ SystolicArray::startRun()
     const Tick computeDone =
         runStart + (k + kFillDrain) * clockPeriod * sim_clock::as_int::ps;
     const Tick ready = std::max(computeDone, busyUntil);
+    // The control's 100-cycle communication latency is charged once per
+    // launch: the done flag appears configLatencyCycles after the run
+    // itself finishes.
+    const Tick doneTick = ready +
+        configLatencyCycles * clockPeriod * sim_clock::as_int::ps;
     DPRINTF(MatMulExec, "%lu: Kernel Run Start (K=%llu, %lu ticks)\n",
             curTick(), static_cast<unsigned long long>(k),
             static_cast<unsigned long>(ready - runStart));
-    schedule(doneEvent, ready);
+    schedule(doneEvent, doneTick);
     busyUntil = ready + kDrainCycles * clockPeriod * sim_clock::as_int::ps;
 }
 

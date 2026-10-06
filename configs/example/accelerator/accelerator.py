@@ -222,6 +222,7 @@ def make_system(elf, issue_width=ISSUE_WIDTH, vlen=VLEN):
     system.dma.sram_port = system.iobus.cpu_side_ports
     system.dma.sram_window = [AddrRange(SRAM_BASE, size="12KiB")]
     system.dma.dram_base = DRAM_BASE
+    system.dma.clock_period = 1000
 
     # The PIO register access itself is free
     system.dma.pio_latency = "1ns"
@@ -231,6 +232,7 @@ def make_system(elf, issue_width=ISSUE_WIDTH, vlen=VLEN):
     system.matmul.pio = system.iobus.mem_side_ports
     system.matmul.local = system.iobus.cpu_side_ports
     system.matmul.pio_latency = "1ns"
+    system.matmul.clock_period = 1000
 
     # The tile scratchpads - one SimpleMemory per SPM tile
     system.spm_qp = SimpleMemory(
@@ -250,7 +252,15 @@ def make_system(elf, issue_width=ISSUE_WIDTH, vlen=VLEN):
     system.spm_so.port = system.iobus.mem_side_ports
 
     # Control CPU (hart 0)
-    control_cpu = RiscvTimingSimpleCPU(cpu_id=0)
+    control_cpu = RiscvO3CPU(
+        cpu_id=0,
+        fetchWidth=issue_width,
+        decodeWidth=issue_width,
+        renameWidth=issue_width,
+        issueWidth=issue_width,
+        wbWidth=issue_width,
+        commitWidth=issue_width,
+    )
     control_cpu.createThreads()
     control_cpu.createInterruptController()
     control_cpu.clk_domain = SrcClockDomain(

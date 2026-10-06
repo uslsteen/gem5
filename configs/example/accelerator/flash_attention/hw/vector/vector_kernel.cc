@@ -3,10 +3,10 @@
  * flash-attention pipeline, with direct scratchpad access.
  *
  * Per tile:
- *   1. wait sync_softmax — read S_j (int16) from SPM_C, convert to the
- *      fp16 tile (bit-exact float_to_half),
- *      run the RVV online softmax (processTile), quantize P to int8 and store
- * it to SPM_A+kQBytes — the array's A operand for the PV runs;
+ *   1. wait sync_softmax — read S_j (int16) from SPM_C, stage it into
+ *      the fp16 score tile, run the RVV online softmax on it, quantize
+ *      P to int8 and store it to SPM_A+kQBytes — the array's A
+ *      operand for the PV runs;
  *   2. wait the per-slice sync_O flags — read the O_j chunks (int16)
  *      from SPM_C one slice at a time and accumulate O = c * O + O_j
  *      (fp32, 16x128);
@@ -77,9 +77,9 @@ extern "C" [[gnu::section(".sram_text"), noreturn]] void vector_main() {
     }
     accel::sync_flag(accel::kSyncSoftmax) = 0;
 
-    // S_j: int16 (the array output) -> fp16 (bit-exact conversion).
+    // S_j: int16 (the array output) -> the fp16 score tile the
+    // microkernel consumes, then the online softmax.
     kernel::s16_tile_to_f16(spm_s, s.s_f16);
-
     softmax.processTile(s.s_f16, s.p_f16, s.m, s.l, s.c);
 
     // Quantize P to int8 ((2 ** 7 - 1) * P, truncated)

@@ -27,7 +27,7 @@ constexpr std::uint32_t kExpHi = 0x42B16666u;
 //   * x is clamped to [kExpLo, kExpHi],
 //   * t   = x * log2(e),
 //   * k   = round-half-away-from-zero(t),  r = t - k  in [-0.5, +0.5],
-//   * 2^r ~= P(r)  (degree-6 near-minimax fit, Horner + FMA),
+//   * 2^r ~= P(r)  (degree-5 near-minimax fit, Horner + FMA),
 //   * 2^k  = bit reconstruction of the fp32 exponent field,
 //   * e^x ~= P(r) * 2^k.
 // NaN lanes are NOT handled here; the caller masks them out.
@@ -49,10 +49,7 @@ vexp_f32(vfloat32m1_t input, std::size_t lanes) noexcept {
   const auto int_float = __riscv_vfcvt_f_x_v_f32m1(int_part, lanes);
   const auto frac_part = __riscv_vfsub_vv_f32m1(scaled, int_float, lanes);
 
-  auto poly = __riscv_vfmv_v_f_f32m1(as_f32(exp_coeffs::kC6), lanes);
-  poly = __riscv_vfmadd_vv_f32m1(
-      poly, frac_part, __riscv_vfmv_v_f_f32m1(as_f32(exp_coeffs::kC5), lanes),
-      lanes);
+  auto poly = __riscv_vfmv_v_f_f32m1(as_f32(exp_coeffs::kC5), lanes);
   poly = __riscv_vfmadd_vv_f32m1(
       poly, frac_part, __riscv_vfmv_v_f_f32m1(as_f32(exp_coeffs::kC4), lanes),
       lanes);
@@ -80,13 +77,6 @@ vexp_f32(vfloat32m1_t input, std::size_t lanes) noexcept {
   return __riscv_vmerge_vvm_f32m1(result, zero_vec, lo_mask, lanes);
 }
 
-[[gnu::section(".sram_text"), gnu::always_inline]] inline float
-exp_rescale(float value) noexcept {
-  const auto input = __riscv_vfmv_v_f_f32m1(value, 1);
-  const auto expv = vexp_f32(input, 1);
-  return __riscv_vfmv_f_s_f32m1_f32(expv);
-}
-
 } // namespace
 
 [[gnu::section(".sram_text")]] void
@@ -97,6 +87,10 @@ RvvSoftmax::processTile(const Tile &S, Tile &P, StateVec &m, StateVec &l,
   const auto neg_inf_vec =
       __riscv_vfmv_v_f_f32m1(as_f32(vconst::kNegInf), lanes);
 
+  float staged_max[cfg::kBR];
+  float staged_sum[cfg::kBR];
+
+  // Phase 1: the per-row stream
   for (std::size_t row = 0; row < cfg::kBR; ++row) {
     // The S tile was produced by s16_tile_to_f16, so its fp16
     const auto score_vec = vload_f32_from_f16(S[row].data(), lanes);
@@ -121,15 +115,38 @@ RvvSoftmax::processTile(const Tile &S, Tile &P, StateVec &m, StateVec &l,
         __riscv_vfredusum_vs_f32m1_f32m1(exp_vec, zero_vec, lanes);
     const float row_sum = __riscv_vfmv_f_s_f32m1_f32(sum_vec);
 
-    const float scale = (max_prev == max_new) ? as_f32(vconst::kOne)
-                                              : exp_rescale(max_prev - max_new);
+    staged_max[row] = max_new;
+    staged_sum[row] = row_sum;
 
-    m[row] = max_new;
-    l[row] = scale * l[row] + row_sum;
-    c[row] = scale;
-
-    vstore_f16_from_f32(P[row].data(), exp_vec, lanes);
+    vstore_f16_from_f32_pos(P[row].data(), exp_vec, lanes);
   }
+
+  // Phase 2: one full-width pass updates the (m, l, c) state
+  const std::size_t state_lanes = __riscv_vsetvl_e32m1(cfg::kBR);
+  const auto max_prev_vec = __riscv_vle32_v_f32m1(m.data(), state_lanes);
+  const auto max_new_vec = __riscv_vle32_v_f32m1(staged_max, state_lanes);
+  const auto sum_vec = __riscv_vle32_v_f32m1(staged_sum, state_lanes);
+
+  const auto d_vec =
+      __riscv_vfsub_vv_f32m1(max_prev_vec, max_new_vec, state_lanes);
+  const auto m_same =
+      __riscv_vmfeq_vv_f32m1_b32(d_vec, zero_vec, state_lanes);
+  const auto m_nan = __riscv_vmfne_vv_f32m1_b32(d_vec, d_vec, state_lanes);
+  const auto m_one = __riscv_vmor_mm_b32(m_same, m_nan, state_lanes);
+
+  auto c_vec = vexp_f32(d_vec, state_lanes);
+  const auto one_vec = __riscv_vfmv_v_f_f32m1(as_f32(vconst::kOne),
+                                              state_lanes);
+  c_vec = __riscv_vmerge_vvm_f32m1(c_vec, one_vec, m_one, state_lanes);
+
+  const auto l_prev_vec = __riscv_vle32_v_f32m1(l.data(), state_lanes);
+  const auto l_new_vec = __riscv_vfadd_vv_f32m1(
+      __riscv_vfmul_vv_f32m1(c_vec, l_prev_vec, state_lanes), sum_vec,
+      state_lanes);
+
+  __riscv_vse32_v_f32m1(m.data(), max_new_vec, state_lanes);
+  __riscv_vse32_v_f32m1(l.data(), l_new_vec, state_lanes);
+  __riscv_vse32_v_f32m1(c.data(), c_vec, state_lanes);
 }
 
 } // namespace kernel

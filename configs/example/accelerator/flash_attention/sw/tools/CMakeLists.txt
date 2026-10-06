@@ -34,6 +34,7 @@ add_custom_command(
     OUTPUT ${GEN_DIR}/exp_coeffs.h
     COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/gen_exp_coeffs.py
+            --degree 5
             --out ${GEN_DIR}/exp_coeffs.h
     DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/gen_exp_coeffs.py
     COMMENT "Generating the 2^r minimax coefficients (exp_coeffs.h)"

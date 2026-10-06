@@ -41,7 +41,7 @@ constexpr std::uint32_t kQuantScale = 0x42FE0000u; // 127.0f
 
 // ---------------------------------------------------------------------------
 // vload_f32_from_f16: widen fp16 (u16) to fp32 bit-exactly, replicating
-// half_to_float() from fp_types.hh for the kernel's domain:
+// half_to_float() from fp_types.hh for the kernel's domain: 
 // NORMAL, ZERO and +-INF inputs.
 // Subnormals are NOT supported here — the kernel's loads are the S tiles:
 // the int16 pipeline produces fp16-normal or zero
@@ -88,19 +88,12 @@ vload_f32_from_f16(const std::uint16_t *ptr, std::size_t lanes) noexcept {
 // vstore_f16_from_f32: narrow fp32 to fp16 (u16) bit-exactly, replicating
 // float_to_half() from fp_types.hh (round toward zero) for the kernel's
 // domain: NORMAL, ZERO and SUBNORMAL values.
-// The overflow branch (|x| > 65504 -> Inf) is omitted: both call sites are
-// bounded — the P tile is in (0, 1] (P = exp(S - m), m the exact row maximum)
-// and the S tile is int16-derived (|x| <= 32768 < 65504) — so neither can
-// overflow fp16; the underflow-to-zero guard stays (exact zeros and
-// the e^-176-tiny P values). One m1 signature: the P rows of
-// processTile and the row-wise S conversion both store 16-lane rows.
 // ---------------------------------------------------------------------------
 [[gnu::section(".sram_text"), gnu::always_inline]] inline void
 vstore_f16_from_f32(std::uint16_t *ptr, vfloat32m1_t value,
                     std::size_t lanes) noexcept {
   const auto bits = __riscv_vreinterpret_v_f32m1_u32m1(value);
 
-  // The sign lands in bit15 directly: (bits >> 16) & 0x8000.
   const auto sign16 = __riscv_vand_vx_u32m1(
       __riscv_vsrl_vx_u32m1(bits, cfg::kF16ToF32SignShift, lanes),
       cfg::kF16SignMask, lanes);
@@ -137,6 +130,50 @@ vstore_f16_from_f32(std::uint16_t *ptr, vfloat32m1_t value,
   const auto result = __riscv_vor_vv_u32m1(body, sign16, lanes);
 
   const auto narrow = __riscv_vnsrl_wx_u16mf2(result, 0, lanes);
+  __riscv_vse16_v_u16mf2(ptr, narrow, lanes);
+}
+
+// ---------------------------------------------------------------------------
+// vstore_f16_from_f32_pos: the P-store variant of vstore_f16_from_f32.
+// P = exp(S - m) >= 0, so the sign field is known to be zero and the
+// sign extraction (vand + vsrl) plus the final sign merge (vor) are
+// dropped. The normal|subnormal|zero branches are unchanged.
+// ---------------------------------------------------------------------------
+[[gnu::section(".sram_text"), gnu::always_inline]] inline void
+vstore_f16_from_f32_pos(std::uint16_t *ptr, vfloat32m1_t value,
+                        std::size_t lanes) noexcept {
+  const auto bits = __riscv_vreinterpret_v_f32m1_u32m1(value);
+
+  const auto exp_s = __riscv_vsub_vx_i32m1(
+      __riscv_vreinterpret_v_u32m1_i32m1(__riscv_vand_vx_u32m1(
+          __riscv_vsrl_vx_u32m1(bits, cfg::kF32MantBits, lanes),
+          cfg::kF32ExpMask, lanes)),
+      cfg::kF32ExpBias, lanes);
+  const auto mant = __riscv_vand_vx_u32m1(bits, cfg::kF32MantMask, lanes);
+
+  // Normal: (exp_s + 15) << 10 | mant >> 13.
+  const auto half_exp = __riscv_vadd_vx_i32m1(exp_s, cfg::kF16ExpBias, lanes);
+  const auto body_norm = __riscv_vor_vv_u32m1(
+      __riscv_vsll_vx_u32m1(__riscv_vreinterpret_v_i32m1_u32m1(half_exp),
+                            cfg::kF16ExpShift, lanes),
+      __riscv_vsrl_vx_u32m1(mant, cfg::kF32ToF16Shift, lanes), lanes);
+
+  // Subnormal: (mant | implicit) >> (-1 - exp_s).
+  const auto shift_amt =
+      __riscv_vreinterpret_v_i32m1_u32m1(__riscv_vnot_v_i32m1(exp_s, lanes));
+  const auto body_sub = __riscv_vsrl_vv_u32m1(
+      __riscv_vor_vx_u32m1(mant, cfg::kF32Implicit, lanes), shift_amt, lanes);
+
+  const auto m_sub =
+      __riscv_vmsle_vx_i32m1_b32(exp_s, cfg::kF16ExpMin - 1, lanes);
+  const auto m_zero = __riscv_vmslt_vx_i32m1_b32(
+      exp_s, cfg::kF16ExpMin - cfg::kF16UflowGuard, lanes);
+
+  auto body = body_norm;
+  body = __riscv_vmerge_vvm_u32m1(body, body_sub, m_sub, lanes);
+  body = __riscv_vmerge_vxm_u32m1(body, 0u, m_zero, lanes);
+
+  const auto narrow = __riscv_vnsrl_wx_u16mf2(body, 0, lanes);
   __riscv_vse16_v_u16mf2(ptr, narrow, lanes);
 }
 

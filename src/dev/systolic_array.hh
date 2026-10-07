@@ -2,7 +2,8 @@
  * Cycle-accurate model of the 16x16 systolic array as dedicated PIO device.
  * *
  * The device performs the arithmetic functionally at launch (int8 ->
- * int16, 64-bit k-major word loads, int16 accumulation) and signals
+ * int16, 64-bit k-major word loads, int32 accumulation with int16
+ * saturation) and signals
  * completion through the PIO flag protocol the firmware polls:
  *
  *   +0  flags (1 B): 0x01 run (kDevInit), 0x04 done (kDevIntr)

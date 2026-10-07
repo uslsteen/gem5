@@ -106,11 +106,13 @@ SystolicArray::startRun()
     spmRead(a, aBuf.data(), tileBytes);
     spmRead(b, bBuf.data(), tileBytes);
 
-    // C[i][j] = sum_k A[i][k] * B[j][k], int8 -> int16 with 64-bit
-    // k-major word loads and an int16 accumulator
+    // C[i][j] = sum_k A[i][k] * B[j][k], int8 -> int16 
+    // The accumulator runs int32 so the full contraction sum is exact;
+    // the 16-bit output saturates. 
+    // The host's quantization scales must keep the contraction sum within the int16 range.
     for (unsigned i = 0; i < kMatrix; ++i) {
         for (unsigned j = 0; j < kMatrix; ++j) {
-            int16_t acc = 0;
+            int32_t acc = 0;
             for (uint64_t kk = 0; kk < k; kk += 8) {
                 uint64_t av, bv;
                 std::memcpy(&av, &aBuf[i * k + kk], sizeof(av));
@@ -122,11 +124,12 @@ SystolicArray::startRun()
                     const int16_t bElem =
                         static_cast<int16_t>(static_cast<int8_t>(
                             (bv >> (8 * e)) & 0xFFu));
-                    acc = static_cast<int16_t>(acc + aElem * bElem);
+                    acc += static_cast<int32_t>(aElem) * bElem;
                 }
             }
-            int16_t accLe = acc;
-            std::memcpy(&cBuf[(i * kMatrix + j) * 2], &accLe, 2);
+            const int16_t accSat =
+                static_cast<int16_t>(std::clamp(acc, -32768, 32767));
+            std::memcpy(&cBuf[(i * kMatrix + j) * 2], &accSat, 2);
         }
     }
     spmWrite(c, cBuf.data(), cBuf.size());

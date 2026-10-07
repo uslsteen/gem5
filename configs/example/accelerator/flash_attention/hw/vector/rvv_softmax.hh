@@ -3,6 +3,7 @@
 
 #include "accelerator_config.hh"
 #include "config.h"
+#include "flash_data.hh"
 #include "fp_types.hh"
 #include "matrix.hh"
 
@@ -256,16 +257,19 @@ accumulate_o_chunk(const std::int16_t *o_chunk, float *o_acc, const StateVec &c,
   }
 }
 
-// O = O / l row by row
+// O = O / l row by row, then final scale s_v / 127
 [[gnu::section(".sram_text"), gnu::always_inline]] inline void
 finalize_o(const float *o_acc, const StateVec &l, float *out) noexcept {
   const std::size_t lanes = __riscv_vsetvl_e32m4(accel::kHeadDim);
+  const auto final_scale =
+      __riscv_vfmv_v_f_f32m4(as_f32(FLASH_FINAL_SCALE_BITS), lanes);
   for (std::size_t row = 0; row < cfg::kBR; ++row) {
     const float *row_acc = o_acc + row * accel::kHeadDim;
     float *row_out = out + row * accel::kHeadDim;
     const auto v = __riscv_vle32_v_f32m4(row_acc, lanes);
     const auto d = __riscv_vfdiv_vf_f32m4(v, l[row], lanes);
-    __riscv_vse32_v_f32m4(row_out, d, lanes);
+    const auto scaled = __riscv_vfmul_vv_f32m4(d, final_scale, lanes);
+    __riscv_vse32_v_f32m4(row_out, scaled, lanes);
   }
 }
 

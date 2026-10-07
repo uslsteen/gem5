@@ -92,8 +92,11 @@ RvvSoftmax::processTile(const Tile &S, Tile &P, StateVec &m, StateVec &l,
 
   // Phase 1: the per-row stream
   for (std::size_t row = 0; row < cfg::kBR; ++row) {
-    // The S tile was produced by s16_tile_to_f16, so its fp16
-    const auto score_vec = vload_f32_from_f16(S[row].data(), lanes);
+    // The S tile was produced by s16_tile_to_f16 (fp16 scores)
+    // logit scale s_q * s_k is applied before the exp.
+    const auto score_vec =
+        __riscv_vfmul_vf_f32m1(vload_f32_from_f16(S[row].data(), lanes),
+                               as_f32(FLASH_LOGIT_SCALE_BITS), lanes);
 
     const auto max_vec =
         __riscv_vfredmax_vs_f32m1_f32m1(score_vec, neg_inf_vec, lanes);

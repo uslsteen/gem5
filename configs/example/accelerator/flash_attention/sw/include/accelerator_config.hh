@@ -66,8 +66,8 @@ inline constexpr int kStageV = 5;     // DMA: V_j -> SPM_B
 inline constexpr int kStagePV = 6;    // array: O_j = P_j V_j (8 chunks)
 inline constexpr int kStageFinal = 7; // final O/l handshake + DMA out
 
-// Quantization: P fp16 -> int8 (array input), truncate toward zero.
-inline constexpr float kInt8Scale = 127.0f;
+// Quantization: P fp16 -> int8 (array input), truncate toward zero;
+// host's s_q/s_k/s_v scales in the generated flash_data.hh.
 
 // Tensor DRAM addresses (the packed Q|K|V image from flash_data.bin)
 inline constexpr std::uint64_t kFlashDataAddr = 0x80100000;

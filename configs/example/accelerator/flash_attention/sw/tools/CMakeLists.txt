@@ -1,15 +1,9 @@
 set(FLASH_TILES 2 CACHE STRING "Number of flash tiles")
 set(FLASH_REGIME prefill CACHE STRING "prefill|decode")
-set(FLASH_CAUSAL OFF CACHE BOOL "Apply causal boundary mask to the last tile")
 
 set(GEN_STAMP ${CMAKE_BINARY_DIR}/flash_gen_params.txt)
 file(GENERATE OUTPUT ${GEN_STAMP}
-     CONTENT "${FLASH_TILES} ${FLASH_REGIME} ${FLASH_CAUSAL}")
-
-set(FLASH_CAUSAL_ARG "")
-if(FLASH_CAUSAL)
-    set(FLASH_CAUSAL_ARG --causal)
-endif()
+     CONTENT "${FLASH_TILES} ${FLASH_REGIME}")
 
 add_custom_command(
     OUTPUT ${GEN_DIR}/flash_data.hh
@@ -18,7 +12,6 @@ add_custom_command(
     COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/gen_flash.py
             --tiles ${FLASH_TILES} --regime ${FLASH_REGIME}
-            ${FLASH_CAUSAL_ARG}
             --gen-input --gen-reference --emit-bin
             --out ${GEN_DIR}/flash_data.hh
             --input-bin ${GEN_DIR}/flash_data.bin
@@ -27,7 +20,7 @@ add_custom_command(
             ${CMAKE_CURRENT_SOURCE_DIR}/consts.py
             ${CMAKE_CURRENT_SOURCE_DIR}/common.py
             ${GEN_STAMP}
-    COMMENT "Generating flash data (tiles=${FLASH_TILES}, ${FLASH_REGIME}, causal=${FLASH_CAUSAL})"
+    COMMENT "Generating flash data (tiles=${FLASH_TILES}, ${FLASH_REGIME})"
     VERBATIM)
 
 add_custom_command(

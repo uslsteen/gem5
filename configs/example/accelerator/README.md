@@ -35,8 +35,16 @@ The prefill/decode regime is also a data-generation only:
 `FLASH_REGIME` (prefill|decode) — in the decode regime `gen_flash.py`
 zeroes all query rows except the first (one token in flight). The
 firmware has no regime logic: it processes whatever the image holds
-(the tile count is inferred from the image size). `FLASH_CAUSAL` adds
-the causal boundary mask to the last tile.
+(the tile count is inferred from the image size).
+
+The host's symmetric per-tensor quantization scales (zero points are
+0) are baked into the generated data: `s_logit = s_q * s_k` is applied
+to the scores before the softmax, and `s_final = s_v / 127` scales the
+final O/l. They travel as fp32 bit patterns in `flash_data.hh`
+(`FLASH_LOGIT_SCALE_BITS`, `FLASH_FINAL_SCALE_BITS`). The fixed
+16-bit array output bounds the operand magnitudes: the generator
+asserts `|S| < 32768` (q, k in [-15, 15] at d = 128) and
+`|O| < 32768` (v in [-16, 16]).
 
 ```sh
 cmake -B build -DFLASH_REGIME=decode
@@ -58,7 +66,7 @@ The run ends by itself (`m5_exit`); `MAX_TICK` is a safety cap only.
 For a timeline trace add:
 
 ```sh
-  --debug-flags=MatMulExec,DmaExec,O3PipeView,UscopeView,Exec \
+  --debug-flags=MatMulExec,DmaExec,O3PipeView,UscopeView \
   --debug-file=/path/to/fa_out/trace.out
 ```
 
